@@ -21,7 +21,7 @@
 
 void sigchld_handler(int s)
 {
-	while (waitpid(-1, NULL, WNOHANG));
+	while (waitpid(-1, NULL, WNOHANG) > 0);
 }
 
 void *get_in_addr(struct sockaddr *sa)
