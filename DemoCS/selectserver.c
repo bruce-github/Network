@@ -1,6 +1,6 @@
 /*
- * *	server.c -- a stream socket server demo
- */
+**	selectserver.c -- a stream socket select server demo
+*/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,16 +13,10 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <sys/wait.h>
-#include <signal.h>
 
 #define PORT "3490"
 
 #define BACKLOG 10
-
-void sigchld_handler(int s)
-{
-	while (waitpid(-1, NULL, WNOHANG) > 0);
-}
 
 void *get_in_addr(struct sockaddr *sa)
 {
@@ -40,10 +34,12 @@ int main(void)
 	struct addrinfo hints, *servinfo, *p;
 	struct sockaddr_storage their_addr;
 	socklen_t sin_size;
-	struct sigaction sa;
 	int yes = 1;
 	char s[INET6_ADDRSTRLEN];
 	int rv;
+
+	fd_set readfds, tmpfds;
+	int fdmax;
 
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC;
@@ -94,44 +90,62 @@ int main(void)
 		exit(1);
 	}
 
-	sa.sa_handler = sigchld_handler;
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = SA_RESTART;
-	if (sigaction(SIGCHLD, &sa, NULL) == -1)
-	{
-		perror("sigaction");
-		exit(1);
-	}
-
-	printf("server: waiting for connections...\n");
+	FD_ZERO(&readfds);
+	FD_SET(sockfd, &readfds);
 
 	while (1)
 	{
-		sin_size = sizeof their_addr;
-		new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
-		if (new_fd == -1)
+		int i;
+
+		fdmax = sockfd;
+		tmpfds = readfds;
+		printf("server: waiting for connections...\n");
+
+		if (select(fdmax + 1, &tmpfds, NULL, NULL, NULL) == -1)
 		{
-			perror("accept");
-			continue;
+			perror("select");
+			exit(2);
 		}
 
-		inet_ntop(their_addr.ss_family, 
-				get_in_addr((struct sockaddr *)&their_addr), 
-				s, sizeof s);
-		printf("server: got connection from %s\n", s);
-
-		if (!fork())
+		for (i = 0; i <= fdmax; ++i)
 		{
-			close(sockfd);
-			if (send(new_fd, "Hello, client!", 14, 0) == -1)
+			if (FD_ISSET(i, &readfds))
 			{
-				perror("send");
-			}
-			close(new_fd);
-			exit(0);
-		}
-		close(new_fd);
-	}
+				if (i == sockfd)
+				{
+					sin_size = sizeof their_addr;
+					new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
+					if (new_fd == -1)
+					{
+						perror("accept");
+					}
+					else
+					{
+						FD_SET(new_fd, &readfds);
+						if (new_fd > fdmax)
+						{
+							fdmax = new_fd;
+						}
+						inet_ntop(their_addr.ss_family, 
+								get_in_addr((struct sockaddr *)&their_addr), 
+								s, sizeof s);
+						printf("selectserver: got connection from %s"
+								" on socket %d\n", s, new_fd);
+					}
+				}
+				else
+				{
+					if (send(new_fd, "Hello, client!", 14, 0) == -1)
+					{
+						perror("send");
+					}
 
+					close(new_fd);
+					FD_CLR(i, &readfds);
+				}
+			}
+		}
+	}
+	
 	return 0;
 }
